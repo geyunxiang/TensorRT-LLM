@@ -357,6 +357,11 @@ TrtGptModelInflightBatching::TrtGptModelInflightBatching(std::shared_ptr<nvinfer
         = std::make_shared<SequenceSlotManager>(getMaxNumSequences(), optionalParams.maxSeqIdleMicroseconds);
 
     mMicroBatchScheduledRequests.resize(mNumMicroBatches);
+    auto& currRequests = mMicroBatchScheduledRequests.at(0);
+
+    TLLM_LOG_INFO("Initializing mMicroBatchScheduledRequests. mNumMicroBatches = %d. currRequests.contextRequests = %lu, currRequests.generationRequests = %lu",
+        mNumMicroBatches, currRequests.contextRequests.size(), currRequests.generationRequests.size());
+
     mDecoderFinishedEvents.resize(mNumMicroBatches);
     mPeftTables.resize(mNumMicroBatches);
 
@@ -784,6 +789,9 @@ void TrtGptModelInflightBatching::forwardSync()
 
     auto& currRequests = mMicroBatchScheduledRequests.at(mMicroBatchId);
 
+    TLLM_LOG_INFO("Before forwardSync. currRequests.contextRequests = %lu, currRequests.generationRequests = %lu",
+        currRequests.contextRequests.size(), currRequests.generationRequests.size());
+
     if (!currRequests.empty())
     {
         if (!mWorldConfig.isPipelineParallel() || !mWorldConfig.isLastPipelineParallelRank())
@@ -882,6 +890,9 @@ void TrtGptModelInflightBatching::forwardSync()
         mKvCacheManager->flushIterationEvents();
     }
 
+    TLLM_LOG_INFO("After forwardSync. currRequests.contextRequests = %lu, currRequests.generationRequests = %lu",
+        currRequests.contextRequests.size(), currRequests.generationRequests.size());
+
     TLLM_LOG_TRACE("%s stop", __PRETTY_FUNCTION__);
 }
 
@@ -923,8 +934,11 @@ void TrtGptModelInflightBatching::forwardAsync(RequestList const& activeRequests
         verifyRequests(activeRequests);
         if (mModelConfig.isTransformerBased() && getKVCacheManager() && mCacheTransceiver)
         {
+            // TLLM_LOG_DEBUG("Going to checkDisaggGenTransferStatus");
+            // Wouldn't call this
             checkDisaggGenTransferStatus(activeRequests);
         }
+        TLLM_LOG_INFO("Getting currRequests. mMicroBatchId = %d, mMicroBatchScheduledRequests.size() = %d", mMicroBatchId, mMicroBatchScheduledRequests.size());
         auto& currRequests = mMicroBatchScheduledRequests.at(mMicroBatchId);
 
         // Get a new set of requests for that context
@@ -933,9 +947,15 @@ void TrtGptModelInflightBatching::forwardAsync(RequestList const& activeRequests
         TLLM_LOG_DEBUG("Running DECODER request scheduler");
         auto [fittingRequests, fittingDisaggGenInitRequests, requestsToPause]
             = (*mCapacityScheduler)(activeRequests, mKvCacheManager, mPeftCacheManager, mCrossKvCacheManager);
+        TLLM_LOG_INFO("CapacityScheduler arranged %d fitting requests, %d fittingDisaggGenInitRequests and %d requestsToPause. "
+                      "Active requests %d.",
+                      fittingRequests.size(), fittingDisaggGenInitRequests.size(), requestsToPause.size(), activeRequests.size());
+
         // Remove from fitting requests the requests that cannot be scheduled due to disagg KV cache transfer
         if (mModelConfig.isTransformerBased() && getKVCacheManager() && mCacheTransceiver)
         {
+            // TLLM_LOG_DEBUG("Going to prepareDisaggGenInitRequests");
+            // Wouldn't call this
             prepareDisaggGenInitRequests(activeRequests, fittingDisaggGenInitRequests);
         }
         if (fittingRequests.empty() && fittingDisaggGenInitRequests.empty())
@@ -949,9 +969,16 @@ void TrtGptModelInflightBatching::forwardAsync(RequestList const& activeRequests
                 // will free kvCache in next iteration.
             }
         }
+
+        TLLM_LOG_INFO("Before batch scheduler. currRequests.contextRequests = %lu, currRequests.generationRequests = %lu",
+            currRequests.contextRequests.size(), currRequests.generationRequests.size());
+
         std::tie(currRequests.contextRequests, currRequests.generationRequests)
             = (*mMicroBatchScheduler)(fittingRequests, mInflightReqIds, mMaxBatchSizeRuntime, mMaxNumTokensRuntime);
         TLLM_CHECK(currRequests.size() <= static_cast<size_t>(getMaxBatchSize()));
+
+        TLLM_LOG_INFO("After batch scheduler. currRequests.contextRequests = %lu, currRequests.generationRequests = %lu",
+            currRequests.contextRequests.size(), currRequests.generationRequests.size());
 
         utils::sortRequests(currRequests);
 
@@ -1257,6 +1284,11 @@ void TrtGptModelInflightBatching::executeBatch(ScheduledRequests const& schedule
     TLLM_LOG_TRACE("%s start", __PRETTY_FUNCTION__);
     NVTX3_SCOPED_RANGE(executeBatch);
 
+    TLLM_LOG_TRACE("context generation fusion: %s"
+                   "scheduled requests context requests: %lu, generation requests: %lu",
+        mCtxGenFusion ? "enabled" : "disabled",
+        scheduledRequests.contextRequests.size(), scheduledRequests.generationRequests.size());
+    // mCtxGenFusion = enabled
     if (!mCtxGenFusion)
     {
         if (!scheduledRequests.contextRequests.empty())

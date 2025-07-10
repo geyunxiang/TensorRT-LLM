@@ -238,9 +238,13 @@ def main(*,
     on_windows = platform.system() == "Windows"
     requirements_filename = "requirements-dev-windows.txt" if on_windows else "requirements-dev.txt"
 
+    print(f"\n\n Prepare to setup_venv\n\n")
+
     # Setup venv and install requirements
     venv_python, venv_conan = setup_venv(project_dir,
                                          project_dir / requirements_filename)
+
+    print(f"\n\n setup_venv completed. venv_python: {venv_python} \n\n")
 
     # Ensure base TRT is installed (check inside the venv)
     reqs = check_output([str(venv_python), "-m", "pip", "freeze"])
@@ -346,6 +350,7 @@ def main(*,
     elif not fmha_v2_cu_dir.exists():
         generate_fmha_cu(project_dir, venv_python)
 
+    print(f"Changing directory to {build_dir}")
     with working_directory(build_dir):
         if clean or first_build or configure_cmake:
             build_run(
@@ -458,6 +463,8 @@ def main(*,
         for header in required_cuda_headers:
             install_file(cuda_include_dir / header, include_dir / header)
 
+
+    print(f"installing files from {build_dir} to {lib_dir}")
     if on_windows:
         install_file(build_dir / "tensorrt_llm/tensorrt_llm.dll",
                      lib_dir / "tensorrt_llm.dll")

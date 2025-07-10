@@ -196,6 +196,15 @@ std::tuple<RequestVector, RequestVector> GuaranteedNoEvictScheduler::impl(
     OptionalRef<kv_cache_manager::BaseKVCacheManager const> crossKvCacheManager,
     OptionalRef<BasePeftCacheManager const> peftCacheManager, RequestList const& activeRequests) const
 {
+    if constexpr (StaticBatchScheduling)
+    {
+        TLLM_LOG_INFO("Running StaticBatchScheduler request scheduler");
+    }
+    else
+    {
+        TLLM_LOG_INFO("Running GuaranteedNoEvictScheduler request scheduler");
+    }
+
     RequestVector scheduledRequests;
 
     // Now check if we can add pending requests
@@ -213,6 +222,7 @@ std::tuple<RequestVector, RequestVector> GuaranteedNoEvictScheduler::impl(
     {
         if (skippingIsRelevant)
         {
+            TLLM_LOG_INFO("skippingIsRelevant"); // called
             std::tie(newlyContributedContextBlocks, newlyContributedCrossContextBlocks)
                 = prefillWithChunkedContextsAlreadyExecuting(activeRequests, kvCacheManager, crossKvCacheManager);
         }
@@ -239,6 +249,7 @@ std::tuple<RequestVector, RequestVector> GuaranteedNoEvictScheduler::impl(
             !req->isDisaggGenerationInitState()
             && (!req->hasReachedState(getNoScheduleUntilState()) || req->hasReachedState(getNoScheduleAfterState())))
         {
+            TLLM_LOG_INFO("Skip request from active requests");
             continue;
         }
 
@@ -248,6 +259,7 @@ std::tuple<RequestVector, RequestVector> GuaranteedNoEvictScheduler::impl(
         }
         else if (req->isGenerationInProgressState())
         {
+            TLLM_LOG_INFO("req isGenerationInProgressState, adding to scheduledRequests");
             scheduledRequests.emplace_back(req);
             reservedBlocks.decrementReservedBlocks(*req);
             if (reservedCrossBlocks)
@@ -262,13 +274,18 @@ std::tuple<RequestVector, RequestVector> GuaranteedNoEvictScheduler::impl(
         }
         else if (req->isDisaggGenerationInitState())
         {
+            TLLM_LOG_INFO("req isDisaggGenerationInitState, adding to pendingDisGenInitRequests");
             pendingDisGenInitRequests.emplace_back(req);
         }
         else
         {
+            TLLM_LOG_INFO("req added to pendingRequests"); // all added
             pendingRequests.emplace_back(req);
         }
     }
+
+    TLLM_LOG_INFO("pendingDisGenInitRequests.size = %d, pendingRequests.size = %d",
+        pendingDisGenInitRequests.size(), pendingRequests.size());
 
     // If StaticBatchScheduling == true check if we can add pending requests only when no requests are active.
     // Otherwise, add just check that we can add pending requests.
@@ -284,12 +301,18 @@ std::tuple<RequestVector, RequestVector> GuaranteedNoEvictScheduler::impl(
             for (auto const& req : requests)
             {
                 // if context request can reuse blocks contributed by another context request, skip
-                if (!StaticBatchScheduling && skippingIsRelevant && !req->isDisaggGenerationInitState()
-                    && beneficialToSkip(req, kvCacheManager, crossKvCacheManager, newlyContributedContextBlocks,
-                        newlyContributedCrossContextBlocks))
+                bool criteria = beneficialToSkip(req, kvCacheManager, crossKvCacheManager, newlyContributedContextBlocks,
+                        newlyContributedCrossContextBlocks);
+                if (criteria)
                 {
-                    continue;
+                    TLLM_LOG_INFO("Beneficial to skip request from pending requests");
                 }
+                // if (!StaticBatchScheduling && skippingIsRelevant && !req->isDisaggGenerationInitState()
+                //     && criteria)
+                // {
+                //     TLLM_LOG_INFO("Skip request from pending requests");
+                //     continue;
+                // }
 
                 if (scheduledRequests.size() >= static_cast<std::size_t>(mMaxNumRequests))
                 {
@@ -306,6 +329,7 @@ std::tuple<RequestVector, RequestVector> GuaranteedNoEvictScheduler::impl(
 
                     if (enoughBlocks && enoughCrossBlocks && neededPeftPages <= availablePeftPages)
                     {
+                        TLLM_LOG_INFO("Emplace back request to scheduledRequests");
                         scheduledRequests.emplace_back(req);
                         reservedBlocks.decrementReservedBlocks(*req);
                         if (reservedCrossBlocks)
@@ -319,6 +343,8 @@ std::tuple<RequestVector, RequestVector> GuaranteedNoEvictScheduler::impl(
                     else if (!enoughBlocks || !enoughCrossBlocks)
                     {
                         // If one requests fails to be scheduled, break
+                        TLLM_LOG_INFO("Request failed to be scheduled, enoughBlocks = %s, enoughCrossBlocks = %s",
+                            enoughBlocks ? "true" : "false", enoughCrossBlocks ? "true" : "false");
                         break;
                     }
                 }
@@ -496,16 +522,19 @@ std::tuple<RequestVector, RequestVector, RequestVector> CapacityScheduler::opera
             RequestVector pausedRequests;
             if constexpr (std::is_same_v<std::decay_t<decltype(scheduler)>, MaxRequestsScheduler>)
             {
+                // TLLM_LOG_INFO("Capacity scheduler is MaxRequestsScheduler");
                 std::tie(tmpFittingRequests, pausedRequests) = scheduler(activeRequests);
             }
             else if constexpr (std::is_same_v<std::decay_t<decltype(scheduler)>, MaxUtilizationScheduler>)
             {
+                // TLLM_LOG_INFO("Capacity scheduler is MaxUtilizationScheduler");
                 std::tie(tmpFittingRequests, pausedRequests)
                     = scheduler(*kvCacheManager, peftCacheManager, activeRequests);
             }
             else if constexpr (std::is_same_v<std::decay_t<decltype(scheduler)>, GuaranteedNoEvictScheduler>
                 || std::is_same_v<std::decay_t<decltype(scheduler)>, StaticBatchScheduler>)
             {
+                TLLM_LOG_INFO("Capacity scheduler is GuaranteedNoEvictScheduler or StaticBatchScheduler");
                 std::tie(tmpFittingRequests, pausedRequests)
                     = scheduler(*kvCacheManager, crossKvCacheManager, peftCacheManager, activeRequests);
             }
@@ -513,7 +542,7 @@ std::tuple<RequestVector, RequestVector, RequestVector> CapacityScheduler::opera
             {
                 throw std::runtime_error("Unsupported capacity scheduler policy");
             }
-            TLLM_LOG_DEBUG("[Summary] Capacity scheduler allows %d requests, pauses %d requests",
+            TLLM_LOG_INFO("[Summary] Capacity scheduler allows %d requests, pauses %d requests",
                 tmpFittingRequests.size(), pausedRequests.size());
 
             RequestVector fittingRequests;

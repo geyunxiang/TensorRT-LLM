@@ -2245,6 +2245,8 @@ void Executor::Impl::executionLoop()
         RequestList finishedRequests;
         if (!activeRequests.empty())
         {
+            TLLM_LOG_INFO("Executor::Impl::executionLoop first check active requests size: %d. Prepare to forwardSync",
+                static_cast<int>(activeRequests.size()));
             finishTimedOutRequests(activeRequests);
             terminateCancelledRequests(activeRequests);
             forwardSync(activeRequests);
@@ -2278,6 +2280,9 @@ void Executor::Impl::executionLoop()
 
         if (!inTransmissionRequests.empty())
         {
+            // TLLM_LOG_DEBUG("Executor::Impl::executionLoop in transmission requests size: %d",
+            //     static_cast<int>(inTransmissionRequests.size()));
+            // never called
             terminateContextFinishedRequests(inTransmissionRequests);
         }
 
@@ -2300,20 +2305,25 @@ void Executor::Impl::executionLoop()
                 = fetchNewRequests(static_cast<SizeType32>(activeRequests.size()), lowestPriority);
             newActiveRequestsQueueLatencyMS = newActiveRequestsQueueLatency;
             numNewActiveRequests = newRequests.size();
+            TLLM_LOG_INFO("fetchNewRequests got %d new requests", numNewActiveRequests);
 
             if (firstIteration)
             {
                 firstIteration = false;
             }
 
+            TLLM_LOG_INFO("Before insert new requests, the active requests have %d requests", activeRequests.size());
             for (auto const& newRequest : newRequests)
             {
                 insertRequestInOrder(activeRequests, newRequest);
             }
+            TLLM_LOG_INFO("After insert new requests, the active requests have %d requests", activeRequests.size());
 
             // Update dynamic tuning stats
             if (mDynamicBatchTuner)
             {
+                // TLLM_LOG_DEBUG("Executor::Impl::executionLoop dynamic batch tuner enabled.");
+                // never called
                 for (auto const& req : activeRequests)
                 {
                     auto const inputLength = req->mPromptLen;
@@ -2325,6 +2335,8 @@ void Executor::Impl::executionLoop()
 
         if (!activeRequests.empty())
         {
+            TLLM_LOG_INFO("Executor::Impl::executionLoop second check active requests size: %d. Prepare to forwardAsync",
+                static_cast<int>(activeRequests.size()));
             forwardAsync(activeRequests);
             updateIterationStats(activeRequests, iterLatencyMS, numNewActiveRequests, newActiveRequestsQueueLatencyMS,
                 static_cast<SizeType32>(finishedRequests.size()), false);
