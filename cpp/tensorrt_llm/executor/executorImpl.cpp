@@ -1372,8 +1372,10 @@ std::vector<RequestWithId> Executor::Impl::getNewReqWithIds(
     std::vector<RequestWithId> reqWithIds;
     if (mIsPipelineLeader)
     {
+        TLLM_LOG_INFO("Executor::Impl::getNewReqWithIds is pipeline leader = true"); // this is called
         if (!worldConfig.isPipelineParallel())
         {
+            TLLM_LOG_INFO("Executor::Impl::getNewReqWithIds pipeline parallel = false"); // this is called
             reqWithIds = getLeaderNewReqWithIds(numActiveRequests, lowestPriorityActive);
             setupDynamicLogitsPostProcessors(reqWithIds);
         }
@@ -1428,6 +1430,7 @@ std::vector<RequestWithId> Executor::Impl::getNewReqWithIds(
     }
     if (!worldConfig.isLastPipelineParallelRank())
     {
+        // This is not called
         auto const peer = worldConfig.getPipelineParallelRank() + 1;
         mRequestWithIdAsyncSndHdl = std::make_unique<RequestWithIdAsyncSend>(mCommPipelineParallel, reqWithIds, peer);
         mRequestWithIdWaitThread->notifyStart();
@@ -1463,6 +1466,7 @@ std::tuple<Executor::Impl::RequestList, double> Executor::Impl::fetchNewRequests
             bool applyLogitsPostProcessorBatched{false};
             if (mModel->getWorldConfig().isLastPipelineParallelRank())
             {
+                TLLM_LOG_INFO("Executor::Impl::fetchNewRequests model world config is last pipeline parallel rank = true");
                 auto logitsPostProcessorName = reqWithId.req.getLogitsPostProcessorName();
                 if (logitsPostProcessorName)
                 {
@@ -1502,6 +1506,7 @@ std::tuple<Executor::Impl::RequestList, double> Executor::Impl::fetchNewRequests
                 reqWithId.id, reqWithId.req, llmRequestLogitsPostProcessor, applyLogitsPostProcessorBatched);
 
             auto numReturnSequences = newLlmReq->getNumSubRequests();
+            TLLM_LOG_INFO("Executor::Impl::fetchNewRequests number of sub requests = %d", newLlmReq->getNumSubRequests());
             if (numReturnSequences > 1)
             {
                 TLLM_CHECK(reqWithId.childReqIds.size() == static_cast<size_t>(numReturnSequences - 1));
@@ -1737,6 +1742,7 @@ void Executor::Impl::forwardAsync(RequestList& activeRequests)
 
         if (mDynamicBatchTuner)
         {
+            TLLM_LOG_INFO("Executor::Impl::forwardAsync dynamic batch tuner = true");
             auto const averageInputLength = static_cast<SizeType32>(mDynamicBatchTuner->getAverageInputLength());
             auto const averageOutputLength = static_cast<SizeType32>(mDynamicBatchTuner->getAverageOutputLength());
             auto const maxCapacityBatchSize = mModel->getMaxCapacityBatchSize(averageInputLength, averageOutputLength);
@@ -2243,6 +2249,8 @@ void Executor::Impl::executionLoop()
         double newActiveRequestsQueueLatencyMS{0.0};
         bool reportFinishedRequests = true;
         RequestList finishedRequests;
+
+        // forwardSync
         if (!activeRequests.empty())
         {
             TLLM_LOG_INFO("Executor::Impl::executionLoop first check active requests size: %d. Prepare to forwardSync",
@@ -2286,6 +2294,7 @@ void Executor::Impl::executionLoop()
             terminateContextFinishedRequests(inTransmissionRequests);
         }
 
+        // get new requests
         if (!mShutdown)
         {
             auto const iterCounter = mModel->getIterCounter();
@@ -2333,6 +2342,7 @@ void Executor::Impl::executionLoop()
             }
         }
 
+        // forwardAsync
         if (!activeRequests.empty())
         {
             TLLM_LOG_INFO("Executor::Impl::executionLoop second check active requests size: %d. Prepare to forwardAsync",

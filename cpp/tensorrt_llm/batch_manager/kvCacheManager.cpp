@@ -980,9 +980,12 @@ SizeType32 WindowBlockManager::loadOrAllocateBlocks(std::vector<BlockKey> const&
     auto blockItr = blockKeys.begin();
     for (int bi = 0; bi < numSharedContextBlocks; ++bi)
     {
+        // mEnablePartialReuse = true
+        // mCopyOnPartialReuse = true
         auto [partialMatch, numMatched, matchingBlock] = searchRoot != nullptr && blockItr != blockKeys.end()
             ? searchRoot->findMatchingBlock(*blockItr, mEnablePartialReuse, mCopyOnPartialReuse)
             : std::make_tuple(false, 0, nullptr);
+
         if (matchingBlock != nullptr)
         {
             KVCacheBlock::IdType matchingBlockId = matchingBlock->getBlockId();
@@ -1060,7 +1063,11 @@ SizeType32 WindowBlockManager::loadOrAllocateBlocks(std::vector<BlockKey> const&
         }
     }
 
+    TLLM_LOG_INFO("In WindowBlockManager::loadOrAllocateBlocks -numSharedContextBlocks = %d, numContextBlocks = %d",
+        numSharedContextBlocks, numContextBlocks);
+    
     // Allocate new blocks that cannot be shared by multiple beams.
+    // The following code would not be run
     for (int bi = numSharedContextBlocks; bi < numContextBlocks; ++bi)
     {
         // TODO: Still look for match. Clone matching block or allocate fresh ones.
@@ -1125,6 +1132,9 @@ void WindowBlockManager::addSequence(
         ? llmRequest.getUniqueTokens(beamIdx)
         : *(llmRequest.getEncoderUniqueTokens().value());
 
+    TLLM_LOG_INFO("In WindowBlockManager::addSequence: uniqueTokens size = %d, inputLength = %d, mTokensPerBlock = %d",
+        uniqueTokens.size(), inputLength, mTokensPerBlock);
+
     // Ignore last token because it can't be recovered
     auto blockedUniqueTokens = chopVectorIntoBlocks<UniqueToken>(uniqueTokens, inputLength - 1, mTokensPerBlock, true);
     // Add empty block if last token is separated
@@ -1146,8 +1156,8 @@ void WindowBlockManager::addSequence(
     mReusedTokens += static_cast<double>(prepopulatedPromptLen);
     mTotalInputTokens += static_cast<double>(uniqueTokens.size());
     llmRequest.setPrepopulatedPromptLen(prepopulatedPromptLen, getTokensPerBlock());
-    TLLM_LOG_DEBUG("addSequence: Request %lu, inputLength %d, prepopulatedPromptLen %d", llmRequest.mRequestId,
-        inputLength, prepopulatedPromptLen);
+    TLLM_LOG_INFO("In WindowBlockManager::addSequence: Request %lu, inputLength %d, prepopulatedPromptLen %d, numContextBlocks = %d", llmRequest.mRequestId,
+        inputLength, prepopulatedPromptLen, numContextBlocks);
 }
 
 void BlockManager::addSequence(
@@ -1906,6 +1916,8 @@ void KVCacheManager::addSequence(
         auto const numContextBlocks = tc::ceilDiv(effectiveInputLength, getTokensPerBlock());
         if (!sequence.isCyclic() && mEnableBlockReuse)
         {
+            TLLM_LOG_INFO("In KVCacheManager::addSequence. sequence is not cyclic and enabled block reuse. numContextBlocks = %d, windowSize = %d",
+                numContextBlocks, windowSize);
             mBlockManager.addSequence(sequence, effectiveInputLength, numContextBlocks, *llmRequest, windowSize);
         }
         else

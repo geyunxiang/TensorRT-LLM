@@ -389,6 +389,8 @@ void RuntimeBuffers::setBufferSizes(RequestVector const& contextRequests, Reques
     auto numContextLogits = numContextRequests;
     numContextTokens = 0;
     maxContextLength = 0;
+    TLLM_LOG_INFO("In RuntimeBuffers::setBufferSizes. contextRequests.size() = %lu, genRequests.size() = %lu",
+        contextRequests.size(), genRequests.size());
     for (auto const& llmReq : contextRequests)
     {
         auto const draftLength = llmReq->isLastContextChunk() ? llmReq->getNumDraftTokens() : 0;
@@ -400,6 +402,8 @@ void RuntimeBuffers::setBufferSizes(RequestVector const& contextRequests, Reques
         {
             maxContextLength = llmReq->mPromptLen;
         }
+        TLLM_LOG_INFO("contextChunkSize = %d, draftLength = %d, numContextTokens = %d, numContextLogits = %d",
+            contextChunkSize, draftLength, numContextTokens, numContextLogits);
     }
 
     // set generation sizes
@@ -939,6 +943,9 @@ std::tuple<SizeType32, RuntimeBuffers::TensorMap const&, RuntimeBuffers::TensorM
     fillIOMaps(modelConfig, worldConfig);
 
     auto const numTokens = getNumTokens();
+    TLLM_LOG_INFO("In RuntimeBuffers::prepareStep. numContextTokens = %d, numGenTokens = %d, numTokens = %d",
+        numContextTokens, numGenTokens, numTokens);
+
     auto const optProfileId = runtime.getOptProfileId(numTokens, ModelConfig::getOptProfilesSplitPoints());
     setContextIndex(optProfileId);
     TLLM_LOG_DEBUG("numTokens: %d, optProfileId: %d", numTokens, optProfileId);

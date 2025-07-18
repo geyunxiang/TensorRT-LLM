@@ -980,8 +980,14 @@ void TrtGptModelInflightBatching::forwardAsync(RequestList const& activeRequests
         TLLM_LOG_INFO("After batch scheduler. currRequests.contextRequests = %lu, currRequests.generationRequests = %lu",
             currRequests.contextRequests.size(), currRequests.generationRequests.size());
 
+        for (const auto& req : currRequests.contextRequests)
+        {
+            TLLM_LOG_INFO("After batch scheduler, context request context chunk size = %d", req->getContextChunkSize());
+        }
+
         utils::sortRequests(currRequests);
 
+        // requestsToPause is empty
         (*mPauseRequests)(requestsToPause, mInflightReqIds, mReqIdsToPause, false, *mSeqSlotManager, mKvCacheManager,
             mCrossKvCacheManager, mPeftCacheManager);
 
@@ -1016,12 +1022,19 @@ void TrtGptModelInflightBatching::forwardAsync(RequestList const& activeRequests
                     mModelConfig, mCrossKvCacheManager);
             }
 
+            for (const auto& req : currRequests.contextRequests)
+            {
+                TLLM_LOG_INFO("After allocate kv cache, context request context chunk size = %d", req->getContextChunkSize());
+            }
+
             mPeftTables.at(mMicroBatchId)
                 = mPeftCacheManager->ensureBatch(currRequests.contextRequests, currRequests.generationRequests, true);
 
             // Do decoder setup before context phase if model needs to setup buffers for the context phase.
             if (mModelConfig.getSpeculativeDecodingMode().needsDecoderPrologue())
             {
+                // TLLM_LOG_INFO("Need to setupDecoderStep");
+                // No need to do this
                 auto const contextBufferId = mCtxGenFusion ? getFusedBufferId() : getContextBufferId();
                 setupDecoderStep(currRequests.contextRequests, *mBuffers.at(contextBufferId),
                     mDecoderInputBuffers.at(getFusedBufferId()));
@@ -1044,6 +1057,7 @@ void TrtGptModelInflightBatching::forwardAsync(RequestList const& activeRequests
             // Postpone decoder setup if model does not need to setup buffers for the context phase.
             if (!mModelConfig.getSpeculativeDecodingMode().needsDecoderPrologue())
             {
+                // No need to do this
                 auto const contextBufferId = mCtxGenFusion ? getFusedBufferId() : getContextBufferId();
                 setupDecoderStep(currRequests.contextRequests, *mBuffers.at(contextBufferId),
                     mDecoderInputBuffers.at(getFusedBufferId()));
@@ -1053,6 +1067,8 @@ void TrtGptModelInflightBatching::forwardAsync(RequestList const& activeRequests
 
             if (isTrtOverlap())
             {
+                // TLLM_LOG_INFO("isTrtOverlap == true");
+                // This is not executed
                 // WAR: Because the decoder is not stateless (yet) a sync is needed between
                 // decoder execution and next decoder step preparation.
                 auto const prevMicroBatchId = getPrevMicroBatchId(mMicroBatchId);
@@ -1076,9 +1092,11 @@ void TrtGptModelInflightBatching::forwardAsync(RequestList const& activeRequests
                 {
                     if (llmReq->isContextInitState())
                     {
+                        TLLM_LOG_INFO("Request with ID %lu is in context init state", llmReq->mRequestId); // This is executed
                         llmReq->moveToNextContextChunk();
                         if (llmReq->getContextRemainingLength() == 0)
                         {
+                            TLLM_LOG_INFO("Request with ID %lu get context remaining length is zero", llmReq->mRequestId); // This is executed
                             TLLM_LOG_DEBUG("[RANK %d] request with ID %lu finishes decoder ctx phase",
                                 COMM_SESSION.getRank(), llmReq->mRequestId);
 
@@ -1102,6 +1120,8 @@ void TrtGptModelInflightBatching::forwardAsync(RequestList const& activeRequests
                     }
                     else if (llmReq->isGenerationInProgressState())
                     {
+                        // TLLM_LOG_INFO("Request with ID %lu is in generation in progress state", llmReq->mRequestId);
+                        // not executed
                         TLLM_LOG_DEBUG("request with ID %lu forwards a step in decoder gen phase", llmReq->mRequestId);
                     }
                 }
